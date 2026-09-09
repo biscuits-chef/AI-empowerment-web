@@ -260,6 +260,8 @@ export const Sidebar = ({
   const [dialog, setDialog] = useState<ConversationDialogState | null>(null);
   const [renameTitle, setRenameTitle] = useState('');
   const openMenuRef = useRef<HTMLDivElement>(null);
+  const dialogElementRef = useRef<HTMLDialogElement>(null);
+  const renameInputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLElement>(null);
   const [scrollTop, setScrollTop] = useState(0);
   const [viewportHeight, setViewportHeight] = useState(DEFAULT_VIEWPORT_HEIGHT);
@@ -385,6 +387,24 @@ export const Sidebar = ({
       document.removeEventListener('keydown', closeMenuOnEscape);
     };
   }, [menuId]);
+
+  useEffect(() => {
+    if (!dialog) return undefined;
+    const dialogElement = dialogElementRef.current;
+    if (!dialogElement) return undefined;
+
+    // 原生 showModal 会把对话框提升到浏览器 top layer，从根本上避开页面堆叠上下文覆盖。
+    if (!dialogElement.open) {
+      if (typeof dialogElement.showModal === 'function') dialogElement.showModal();
+      else dialogElement.setAttribute('open', '');
+    }
+    if (dialog.kind === 'rename') renameInputRef.current?.focus();
+    return () => {
+      if (!dialogElement.open) return;
+      if (typeof dialogElement.close === 'function') dialogElement.close();
+      else dialogElement.removeAttribute('open');
+    };
+  }, [dialog]);
 
   useEffect(() => {
     if (!dialog) return undefined;
@@ -520,24 +540,32 @@ export const Sidebar = ({
       </aside>
 
       {dialog && (
-        <div className="conversation-dialog-layer">
+        <dialog
+          ref={dialogElementRef}
+          className="conversation-dialog-layer"
+          role={dialog.kind === 'rename' ? 'dialog' : 'alertdialog'}
+          aria-modal="true"
+          aria-labelledby={dialog.kind === 'rename' ? 'rename-dialog-title' : 'delete-dialog-title'}
+          aria-describedby={dialog.kind === 'delete' ? 'delete-dialog-description' : undefined}
+          onCancel={(event) => {
+            event.preventDefault();
+            closeDialog();
+          }}
+        >
           <button
             className="conversation-dialog-backdrop"
             data-testid="conversation-dialog-backdrop"
             aria-label="关闭会话操作对话框"
+            tabIndex={-1}
             onClick={closeDialog}
           />
           {dialog.kind === 'rename' ? (
-            <div
-              className="conversation-dialog"
-              role="dialog"
-              aria-modal="true"
-              aria-labelledby="rename-dialog-title"
-            >
+            <div className="conversation-dialog">
               <h2 id="rename-dialog-title">修改聊天名称</h2>
               <form onSubmit={submitRename}>
                 <label htmlFor="conversation-title">聊天名称</label>
                 <input
+                  ref={renameInputRef}
                   id="conversation-title"
                   autoFocus
                   maxLength={100}
@@ -555,13 +583,7 @@ export const Sidebar = ({
               </form>
             </div>
           ) : (
-            <div
-              className="conversation-dialog"
-              role="alertdialog"
-              aria-modal="true"
-              aria-labelledby="delete-dialog-title"
-              aria-describedby="delete-dialog-description"
-            >
+            <div className="conversation-dialog">
               <h2 id="delete-dialog-title">删除聊天</h2>
               <p id="delete-dialog-description">
                 确定删除“{dialog.conversation.title}”吗？删除后不可恢复。
@@ -583,7 +605,7 @@ export const Sidebar = ({
               </div>
             </div>
           )}
-        </div>
+        </dialog>
       )}
     </>
   );

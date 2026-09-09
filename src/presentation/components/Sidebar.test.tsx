@@ -140,8 +140,14 @@ describe('Sidebar', () => {
     );
     await user.click(screen.getByLabelText('管理聊天：产品信息'));
     await user.click(screen.getByText('修改名称'));
-    expect(screen.getByRole('dialog', { name: '修改聊天名称' })).toBeInTheDocument();
+    const renameDialog = screen.getByRole('dialog', { name: '修改聊天名称' });
+    expect(renameDialog).toBeInTheDocument();
+    expect(renameDialog.tagName).toBe('DIALOG');
+    expect(renameDialog).toHaveAttribute('open');
+    expect(renameDialog).toHaveAttribute('aria-modal', 'true');
+    expect(screen.getByTestId('conversation-dialog-backdrop')).toHaveAttribute('tabindex', '-1');
     const titleInput = screen.getByLabelText('聊天名称');
+    expect(titleInput).toHaveFocus();
     expect(titleInput).toHaveValue('产品信息');
     await user.clear(titleInput);
     await user.type(titleInput, ' 新名称 ');
@@ -151,6 +157,11 @@ describe('Sidebar', () => {
     await user.click(screen.getByLabelText('管理聊天：产品信息'));
     await user.click(screen.getByText('修改名称'));
     await user.click(screen.getByTestId('conversation-dialog-backdrop'));
+    expect(screen.queryByRole('dialog', { name: '修改聊天名称' })).not.toBeInTheDocument();
+
+    await user.click(screen.getByLabelText('管理聊天：产品信息'));
+    await user.click(screen.getByText('修改名称'));
+    await user.keyboard('{Escape}');
     expect(screen.queryByRole('dialog', { name: '修改聊天名称' })).not.toBeInTheDocument();
   });
 
