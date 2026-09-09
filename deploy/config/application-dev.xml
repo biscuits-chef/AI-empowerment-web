@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<application>
+    <environment>development</environment>
+    <apiBaseUrl>/api/v1</apiBaseUrl>
+    <requestTimeoutMillis>10000</requestTimeoutMillis>
+    <streamIdleTimeoutMillis>130000</streamIdleTimeoutMillis>
+    <maxQuestionCharacters>4000</maxQuestionCharacters>
+</application>

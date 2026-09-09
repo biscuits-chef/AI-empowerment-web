@@ -1,0 +1,32 @@
+{
+  "description": "加载前端生产交付约束，并在执行命令前进行安全检查。",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$(git rev-parse --show-toplevel)/.codex/hooks/session_start.py\"",
+            "statusMessage": "正在加载生产交付约束",
+            "additionalContextLimit": 2000,
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "^Bash$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$(git rev-parse --show-toplevel)/.codex/hooks/pre_tool_use_policy.py\"",
+            "statusMessage": "正在检查命令安全性",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}
