@@ -33,7 +33,7 @@ export type ConversationPage = {
 };
 
 /**
- * 前端可选择并随提问提交给后端的 Agent 类型。
+ * 前端在新建会话首次提问前可选择并提交给后端的 Agent 类型。
  */
 export type AgentType =
   'SMART_DATA' | 'SMART_QA' | 'CONTRACT_REVIEW' | 'CONTRACT_COMPARE' | 'CONFIRMATION_CHECK';
@@ -217,6 +217,18 @@ export type AnswerSnapshot = {
    * 停止完成时间。
    */
   cancelledAt: string | null;
+};
+
+/**
+ * 统一提问接口返回的会话与回答受理结果。
+ */
+export type QuestionSubmission = {
+  /** 提问所属的会话。 */
+  conversation: Conversation;
+  /** 本次请求是否采用首次提问创建会话语义。 */
+  conversationCreated: boolean;
+  /** 已经持久化的回答受理快照。 */
+  answer: AnswerSnapshot;
 };
 
 /**

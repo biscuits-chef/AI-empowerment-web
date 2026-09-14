@@ -6,9 +6,7 @@ import type {
   ConversationPage,
   Feedback,
   Message,
-  QuestionFileReference,
-  TemporaryFile,
-  TemporaryFileUsage,
+  QuestionSubmission,
 } from '../../domain/models';
 import type { RuntimeConfig } from '../config/runtimeConfig';
 import { SseParser } from '../stream/sseParser';
@@ -33,6 +31,16 @@ type ProblemDetail = {
    * 链路追踪 ID。
    */
   traceId?: string;
+};
+
+/**
+ * 面向前端业务接口的 GET/POST 请求初始化参数。
+ */
+type FrontendRequestInit = Omit<RequestInit, 'method'> & {
+  /**
+   * 允许发送的 HTTP 方法；省略时由浏览器使用 GET。
+   */
+  method?: 'GET' | 'POST';
 };
 
 /**
@@ -124,28 +132,17 @@ export class HttpQaGateway implements QaGateway {
   }
 
   /**
-   * 创建用户聊天会话。
-   *
-   * @param title 会话名称。
-   *
-   * @returns 函数处理结果。
-   */
-  createConversation(title: string): Promise<Conversation> {
-    return this.request('/chats', { method: 'POST', body: JSON.stringify({ title }) });
-  }
-
-  /**
    * 修改指定会话名称。
    *
-   * @param chatId 会话 ID。
+   * @param chatId 要修改的会话 ID。
    *
    * @param title 会话名称。
    *
    * @returns 函数处理结果。
    */
   renameConversation(chatId: string, title: string): Promise<Conversation> {
-    return this.request(`/chats/${chatId}`, {
-      method: 'PATCH',
+    return this.request(`/chats/${chatId}/rename`, {
+      method: 'POST',
       body: JSON.stringify({ title }),
     });
   }
@@ -158,7 +155,7 @@ export class HttpQaGateway implements QaGateway {
    * @returns 函数处理结果。
    */
   deleteConversation(chatId: string): Promise<void> {
-    return this.request(`/chats/${chatId}`, { method: 'DELETE' });
+    return this.request(`/chats/${chatId}/deletion`, { method: 'POST' });
   }
 
   /**
@@ -175,58 +172,29 @@ export class HttpQaGateway implements QaGateway {
   }
 
   /**
-   * 上传一个会话临时文件。
-   *
-   * @param chatId 会话 ID。
-   * @param file 浏览器选择的文件。
-   * @param usage 文件默认使用角色。
-   * @returns 服务端文件元数据。
-   */
-  uploadFile(chatId: string, file: File, usage: TemporaryFileUsage): Promise<TemporaryFile> {
-    const form = new FormData();
-    form.append('file', file);
-    form.append('usage', usage);
-    return this.request(`/chats/${chatId}/files`, {
-      method: 'POST',
-      headers: { 'Idempotency-Key': crypto.randomUUID() },
-      body: form,
-    });
-  }
-
-  /**
-   * 删除当前会话内的临时文件。
-   *
-   * @param chatId 会话 ID。
-   * @param fileId 文件 ID。
-   * @returns 函数处理结果。
-   */
-  deleteFile(chatId: string, fileId: string): Promise<void> {
-    return this.request(`/chats/${chatId}/files/${fileId}`, { method: 'DELETE' });
-  }
-
-  /**
    * 提交问题并取得持久化回答凭据。
    *
    * @param chatId 会话 ID。
    *
    * @param question 用户问题。
    *
-   * @param agentType 用户在前端选择的 Agent 类型。
+   * @param agentType 首次提问选择的 Agent 类型；已有会话提问时为空。
    *
-   * @param files 本次问题引用的临时文件。
+   * @param idempotencyKey 当前逻辑提问在失败重试期间复用的幂等键。
    *
    * @returns 函数处理结果。
    */
   submitQuestion(
-    chatId: string,
+    chatId: string | null,
     question: string,
-    agentType: AgentType,
-    files: QuestionFileReference[] = [],
-  ): Promise<AnswerSnapshot> {
-    return this.request(`/chats/${chatId}/questions`, {
+    agentType: AgentType | null,
+    idempotencyKey: string,
+  ): Promise<QuestionSubmission> {
+    const body = chatId === null ? { chatId, agentType, question } : { chatId, question };
+    return this.request('/questions/submission', {
       method: 'POST',
-      headers: { 'Idempotency-Key': crypto.randomUUID() },
-      body: JSON.stringify({ agentType, question, files }),
+      headers: { 'Idempotency-Key': idempotencyKey },
+      body: JSON.stringify(body),
     });
   }
 
@@ -281,7 +249,7 @@ export class HttpQaGateway implements QaGateway {
    */
   recordFeedback(answerId: string, feedback: Feedback): Promise<void> {
     return this.request(`/answers/${answerId}/feedback`, {
-      method: 'PUT',
+      method: 'POST',
       body: JSON.stringify({ feedback }),
     });
   }
@@ -354,7 +322,7 @@ export class HttpQaGateway implements QaGateway {
    *
    * @returns 函数处理结果。
    */
-  private async request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  private async request<T>(path: string, init: FrontendRequestInit = {}): Promise<T> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.config.requestTimeoutMillis);
     try {

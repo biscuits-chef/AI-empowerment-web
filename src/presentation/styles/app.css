@@ -137,6 +137,11 @@ summary:focus-visible {
   border-right: 1px solid var(--border);
 }
 
+.sidebar--persistent {
+  position: relative;
+  z-index: auto;
+}
+
 .sidebar__brand {
   display: flex;
   align-items: center;
@@ -166,8 +171,17 @@ summary:focus-visible {
 
 .sidebar__brand-copy {
   display: flex;
+  flex: 1 1 auto;
   flex-direction: column;
   min-width: 0;
+  overflow: hidden;
+}
+
+.sidebar__brand-copy strong,
+.sidebar__brand-copy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .sidebar__brand-copy strong {
@@ -182,8 +196,14 @@ summary:focus-visible {
 }
 
 .sidebar__close {
-  display: none;
+  display: inline-flex;
+  flex: 0 0 34px;
   margin-left: auto;
+}
+
+.sidebar__open {
+  flex: 0 0 34px;
+  margin-right: 8px;
 }
 
 .new-chat-button {
@@ -227,7 +247,9 @@ summary:focus-visible {
 }
 
 .conversation-dialog-layer[open] {
+  z-index: 2147483647;
   display: grid;
+  isolation: isolate;
 }
 
 .conversation-dialog-layer::backdrop {
@@ -338,6 +360,10 @@ summary:focus-visible {
   background: var(--panel-hover);
 }
 
+.conversation-item.has-open-menu {
+  z-index: 30;
+}
+
 .conversation-item__select {
   display: flex;
   flex: 1;
@@ -379,6 +405,11 @@ summary:focus-visible {
   overflow: visible;
   text-overflow: clip;
   animation: conversation-title-scroll var(--conversation-title-duration) linear 0.7s forwards;
+}
+
+.sidebar.has-open-dialog .conversation-item__title-text {
+  transform: none;
+  animation: none;
 }
 
 .conversation-item__more {
@@ -1663,6 +1694,16 @@ summary:focus-visible {
     transform: translateX(0);
   }
 
+  .sidebar.sidebar--persistent {
+    position: relative;
+    inset: auto;
+    flex: 0 0 clamp(176px, 42vw, 264px);
+    width: clamp(176px, 42vw, 264px);
+    transform: none;
+    transition: none;
+    box-shadow: none;
+  }
+
   .sidebar-backdrop {
     position: fixed;
     z-index: 19;
@@ -1674,7 +1715,6 @@ summary:focus-visible {
     background: rgba(12, 16, 29, 0.38);
   }
 
-  .sidebar__close,
   .mobile-menu {
     display: inline-flex;
   }

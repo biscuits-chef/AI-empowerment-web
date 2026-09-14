@@ -139,12 +139,14 @@ describe('Sidebar', () => {
       />,
     );
     await user.click(screen.getByLabelText('管理聊天：产品信息'));
+    expect(screen.getByText('产品信息').closest('.conversation-item')).toHaveClass('has-open-menu');
     await user.click(screen.getByText('修改名称'));
     const renameDialog = screen.getByRole('dialog', { name: '修改聊天名称' });
     expect(renameDialog).toBeInTheDocument();
     expect(renameDialog.tagName).toBe('DIALOG');
     expect(renameDialog).toHaveAttribute('open');
     expect(renameDialog).toHaveAttribute('aria-modal', 'true');
+    expect(screen.getByRole('complementary', { name: '聊天记录' })).toHaveClass('has-open-dialog');
     expect(screen.getByTestId('conversation-dialog-backdrop')).toHaveAttribute('tabindex', '-1');
     const titleInput = screen.getByLabelText('聊天名称');
     expect(titleInput).toHaveFocus();

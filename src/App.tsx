@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Menu, Moon, ShieldCheck, Sun } from 'lucide-react';
+import { Moon, PanelLeftOpen, ShieldCheck, Sun } from 'lucide-react';
 import { useChatController } from './application/hooks/useChatController';
 import type { QaGateway } from './application/ports/qaGateway';
 import type { RuntimeConfig } from './infrastructure/config/runtimeConfig';
@@ -34,11 +34,11 @@ type AppProps = {
  */
 export const App = ({ gateway, config }: AppProps) => {
   const controller = useChatController(gateway);
-  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [theme, setTheme] = useState<'light' | 'dark'>(() =>
     window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light',
   );
   const [draft, setDraft] = useState('');
+  const [sidebarOpen, setSidebarOpen] = useState(true);
   const hasMessages = controller.state.messages.length > 0;
   const activeAnswerId = useMemo(
     () =>
@@ -57,35 +57,36 @@ export const App = ({ gateway, config }: AppProps) => {
 
   return (
     <div className="app" data-theme={theme}>
-      <Sidebar
-        conversations={controller.state.conversations}
-        activeChatId={controller.state.activeChatId}
-        open={sidebarOpen}
-        onClose={() => setSidebarOpen(false)}
-        onNewChat={() => {
-          controller.newChat();
-          setSidebarOpen(false);
-        }}
-        onSelect={(chatId) => {
-          void controller.selectChat(chatId);
-          setSidebarOpen(false);
-        }}
-        onRename={(chatId, title) => void controller.renameChat(chatId, title)}
-        onDelete={(chatId) => void controller.deleteChat(chatId)}
-        hasMore={controller.state.hasMoreConversations}
-        loadingMore={controller.state.loadingMoreConversations}
-        onLoadMore={() => void controller.loadMoreConversations()}
-      />
+      {sidebarOpen && (
+        <Sidebar
+          conversations={controller.state.conversations}
+          activeChatId={controller.state.activeChatId}
+          open
+          persistent
+          onClose={() => setSidebarOpen(false)}
+          onNewChat={controller.newChat}
+          onSelect={(chatId) => {
+            void controller.selectChat(chatId);
+          }}
+          onRename={(chatId, title) => void controller.renameChat(chatId, title)}
+          onDelete={(chatId) => void controller.deleteChat(chatId)}
+          hasMore={controller.state.hasMoreConversations}
+          loadingMore={controller.state.loadingMoreConversations}
+          onLoadMore={() => void controller.loadMoreConversations()}
+        />
+      )}
 
       <main className={`main-panel ${hasMessages ? 'main-panel--active' : 'main-panel--empty'}`}>
         <header className="topbar">
-          <button
-            className="icon-button mobile-menu"
-            aria-label="打开侧边栏"
-            onClick={() => setSidebarOpen(true)}
-          >
-            <Menu size={20} />
-          </button>
+          {!sidebarOpen && (
+            <button
+              className="icon-button sidebar__open"
+              aria-label="打开侧边栏"
+              onClick={() => setSidebarOpen(true)}
+            >
+              <PanelLeftOpen size={18} />
+            </button>
+          )}
           <div className="topbar__title">
             <strong title={topbarTitle}>{topbarTitle}</strong>
             <span>
@@ -126,16 +127,12 @@ export const App = ({ gateway, config }: AppProps) => {
                 agents={AGENT_CATALOG}
                 activeAgentType={controller.activeAgentType}
                 onAgentChange={controller.selectAgent}
+                showAgentSelector={controller.state.activeChatId === null}
                 activeAnswerId={activeAnswerId}
                 disabled={controller.state.loading || controller.state.sending}
                 maxCharacters={config.maxQuestionCharacters}
                 value={draft}
-                attachments={controller.attachments}
-                uploading={controller.uploadingFiles}
                 onChange={setDraft}
-                onFilesSelected={(files) => void controller.uploadFiles(files)}
-                onRemoveAttachment={(fileId) => void controller.removeAttachment(fileId)}
-                onAttachmentUsageChange={controller.changeAttachmentUsage}
                 onStop={(answerId) => void controller.stopAnswer(answerId)}
                 onSubmit={(question) => {
                   setDraft('');
@@ -158,16 +155,12 @@ export const App = ({ gateway, config }: AppProps) => {
             agents={AGENT_CATALOG}
             activeAgentType={controller.activeAgentType}
             onAgentChange={controller.selectAgent}
+            showAgentSelector={controller.state.activeChatId === null}
             activeAnswerId={activeAnswerId}
             disabled={controller.state.loading || controller.state.sending}
             maxCharacters={config.maxQuestionCharacters}
             value={draft}
-            attachments={controller.attachments}
-            uploading={controller.uploadingFiles}
             onChange={setDraft}
-            onFilesSelected={(files) => void controller.uploadFiles(files)}
-            onRemoveAttachment={(fileId) => void controller.removeAttachment(fileId)}
-            onAttachmentUsageChange={controller.changeAttachmentUsage}
             onStop={(answerId) => void controller.stopAnswer(answerId)}
             onSubmit={(question) => {
               setDraft('');

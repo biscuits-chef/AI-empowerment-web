@@ -29,6 +29,10 @@ type SidebarProps = {
    */
   open: boolean;
   /**
+   * 是否作为占据独立布局列的常驻侧栏展示。
+   */
+  persistent?: boolean;
+  /**
    * 关闭回调。
    */
   onClose: () => void;
@@ -246,6 +250,7 @@ export const Sidebar = ({
   conversations,
   activeChatId,
   open,
+  persistent = false,
   onClose,
   onNewChat,
   onSelect,
@@ -422,8 +427,13 @@ export const Sidebar = ({
 
   return (
     <>
-      {open && <button className="sidebar-backdrop" aria-label="关闭侧边栏" onClick={onClose} />}
-      <aside className={`sidebar ${open ? 'sidebar--open' : ''}`} aria-label="聊天记录">
+      {open && !persistent && (
+        <button className="sidebar-backdrop" aria-label="关闭侧边栏" onClick={onClose} />
+      )}
+      <aside
+        className={`sidebar ${open ? 'sidebar--open' : ''} ${persistent ? 'sidebar--persistent' : ''} ${dialog ? 'has-open-dialog' : ''}`}
+        aria-label="聊天记录"
+      >
         <div className="sidebar__brand">
           <div className="brand-mark" aria-hidden="true">
             智
@@ -475,7 +485,7 @@ export const Sidebar = ({
                 <div
                   className={`conversation-item ${
                     activeChatId === row.conversation.id ? 'is-active' : ''
-                  }`}
+                  } ${menuId === row.conversation.id ? 'has-open-menu' : ''}`}
                   key={row.key}
                   ref={menuId === row.conversation.id ? openMenuRef : undefined}
                   style={{ height: row.height, transform: `translateY(${row.top}px)` }}

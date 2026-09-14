@@ -6,9 +6,7 @@ import type {
   ConversationPage,
   Feedback,
   Message,
-  QuestionFileReference,
-  TemporaryFile,
-  TemporaryFileUsage,
+  QuestionSubmission,
 } from '../../domain/models';
 
 /**
@@ -45,17 +43,9 @@ export interface QaGateway {
    */
   listConversations(cursor?: string, limit?: number): Promise<ConversationPage>;
   /**
-   * 创建用户聊天会话。
-   *
-   * @param title 会话名称。
-   *
-   * @returns 函数处理结果。
-   */
-  createConversation(title: string): Promise<Conversation>;
-  /**
    * 修改指定会话名称。
    *
-   * @param chatId 会话 ID。
+   * @param chatId 要修改的会话 ID。
    *
    * @param title 会话名称。
    *
@@ -81,41 +71,24 @@ export interface QaGateway {
    */
   listMessages(chatId: string, limit?: number): Promise<Message[]>;
   /**
-   * 上传一个会话临时文件。
-   *
-   * @param chatId 会话 ID。
-   * @param file 浏览器选择的文件。
-   * @param usage 文件默认使用角色。
-   * @returns 服务端文件元数据。
-   */
-  uploadFile(chatId: string, file: File, usage: TemporaryFileUsage): Promise<TemporaryFile>;
-  /**
-   * 删除当前会话内的临时文件。
-   *
-   * @param chatId 会话 ID。
-   * @param fileId 文件 ID。
-   * @returns 函数处理结果。
-   */
-  deleteFile(chatId: string, fileId: string): Promise<void>;
-  /**
    * 提交问题并取得持久化回答凭据。
    *
    * @param chatId 会话 ID。
    *
    * @param question 用户问题。
    *
-   * @param agentType 用户在前端选择的 Agent 类型。
+   * @param agentType 首次提问选择的 Agent 类型；已有会话提问时为空。
    *
-   * @param files 本次问题引用的临时文件。
+   * @param idempotencyKey 当前逻辑提问在失败重试期间复用的幂等键。
    *
    * @returns 函数处理结果。
    */
   submitQuestion(
-    chatId: string,
+    chatId: string | null,
     question: string,
-    agentType: AgentType,
-    files?: QuestionFileReference[],
-  ): Promise<AnswerSnapshot>;
+    agentType: AgentType | null,
+    idempotencyKey: string,
+  ): Promise<QuestionSubmission>;
   /**
    * 把原问题作为新的完整问答轮次重新发起。
    *

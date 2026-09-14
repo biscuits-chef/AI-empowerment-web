@@ -1,21 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import type { DragEvent } from 'react';
-import {
-  ArrowUp,
-  ChartNoAxesCombined,
-  Check,
-  FileText,
-  LoaderCircle,
-  Paperclip,
-  Square,
-  X,
-} from 'lucide-react';
-import type {
-  AgentDefinition,
-  AgentType,
-  TemporaryFile,
-  TemporaryFileUsage,
-} from '../../domain/models';
+import { ArrowUp, ChartNoAxesCombined, Check, Square } from 'lucide-react';
+import type { AgentDefinition, AgentType } from '../../domain/models';
 
 /**
  * 问题输入组件属性。
@@ -31,6 +16,8 @@ type ComposerProps = {
    * @param agentType 用户选择的 Agent 类型。
    */
   onAgentChange: (agentType: AgentType) => void;
+  /** 仅在新建会话首次提问前允许展示 Agent 选择器。 */
+  showAgentSelector: boolean;
   /** 当前执行中的回答 ID；为空时显示发送按钮。 */
   activeAnswerId?: string;
   /**
@@ -45,10 +32,6 @@ type ComposerProps = {
    * 输入值。
    */
   value: string;
-  /** 已上传并准备随本次问题提交的附件。 */
-  attachments: TemporaryFile[];
-  /** 是否正在上传附件。 */
-  uploading: boolean;
   /**
    * 内容变更回调。
    *
@@ -62,52 +45,11 @@ type ComposerProps = {
    */
   onSubmit: (question: string) => void;
   /**
-   * 用户选择文件回调。
-   *
-   * @param files 浏览器选择的文件列表。
-   */
-  onFilesSelected: (files: File[]) => void;
-  /**
-   * 删除当前待提交附件回调。
-   *
-   * @param fileId 文件 ID。
-   */
-  onRemoveAttachment: (fileId: string) => void;
-  /**
-   * 修改当前问题中的附件角色。
-   *
-   * @param fileId 文件 ID。
-   * @param usage 新业务角色。
-   */
-  onAttachmentUsageChange: (fileId: string, usage: TemporaryFileUsage) => void;
-  /**
    * 停止当前执行中回答。
    *
    * @param answerId 回答 ID。
    */
   onStop?: (answerId: string) => void;
-};
-
-/**
- * 将文件字节数格式化为用户易读文本。
- *
- * @param sizeBytes 文件字节数。
- * @returns 用户易读大小。
- */
-const formatSize = (sizeBytes: number): string =>
-  sizeBytes < 1024 ? `${sizeBytes} B` : `${(sizeBytes / 1024).toFixed(1)} KB`;
-
-/**
- * 将服务端文件状态转换为安全中文提示。
- *
- * @param file 临时文件。
- * @returns 文件状态提示。
- */
-const fileStatus = (file: TemporaryFile): string => {
-  if (file.status === 'READY') return '已就绪';
-  if (file.status === 'FAILED') return '处理失败';
-  if (file.status === 'STORED') return '等待解析或 OCR';
-  return '正在上传';
 };
 
 /**
@@ -121,25 +63,18 @@ export const Composer = ({
   agents,
   activeAgentType,
   onAgentChange,
+  showAgentSelector,
   activeAnswerId,
   disabled,
   maxCharacters,
   value,
-  attachments,
-  uploading,
   onChange,
   onSubmit,
-  onFilesSelected,
-  onRemoveAttachment,
-  onAttachmentUsageChange,
   onStop = () => undefined,
 }: ComposerProps) => {
-  const fileInput = useRef<HTMLInputElement>(null);
   const agentMenu = useRef<HTMLDivElement>(null);
   const agentMenuTrigger = useRef<HTMLButtonElement>(null);
-  const [dragging, setDragging] = useState(false);
   const [agentMenuOpen, setAgentMenuOpen] = useState(false);
-  const filesReady = attachments.every((file) => file.status === 'READY');
   const availableAgents = agents.filter(({ available }) => available);
   const activeAgent =
     availableAgents.find(({ id }) => id === activeAgentType) ?? availableAgents[0];
@@ -182,72 +117,13 @@ export const Composer = ({
    */
   const submit = (): void => {
     const question = value.trim();
-    if (!question || disabled || uploading || !filesReady) return;
+    if (!question || disabled) return;
     onSubmit(question);
-  };
-
-  /**
-   * 接收拖入输入区的文件并复位拖拽状态。
-   *
-   * @param event 浏览器拖放事件。
-   */
-  const dropFiles = (event: DragEvent<HTMLDivElement>): void => {
-    event.preventDefault();
-    setDragging(false);
-    if (disabled || uploading) return;
-    onFilesSelected(Array.from(event.dataTransfer.files));
   };
 
   return (
     <div className="composer-wrap">
-      <div
-        className={`composer ${dragging ? 'is-dragging' : ''}`}
-        onDragEnter={(event) => {
-          event.preventDefault();
-          if (!disabled && !uploading) setDragging(true);
-        }}
-        onDragOver={(event) => event.preventDefault()}
-        onDragLeave={(event) => {
-          if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDragging(false);
-        }}
-        onDrop={dropFiles}
-      >
-        {attachments.length > 0 && (
-          <ul className="attachment-list" aria-label="待发送附件">
-            {attachments.map((file) => (
-              <li className="attachment-item" key={file.id}>
-                <FileText size={18} aria-hidden="true" />
-                <div className="attachment-item__summary">
-                  <strong title={file.name}>{file.name}</strong>
-                  <span>
-                    {formatSize(file.sizeBytes)} · {fileStatus(file)}
-                  </span>
-                </div>
-                <select
-                  aria-label={`设置附件用途：${file.name}`}
-                  value={file.usage}
-                  disabled={disabled}
-                  onChange={(event) =>
-                    onAttachmentUsageChange(file.id, event.target.value as TemporaryFileUsage)
-                  }
-                >
-                  <option value="AUTO">自动识别用途</option>
-                  <option value="QUERY_INPUT">作为查询条件</option>
-                  <option value="EVIDENCE">作为回答证据</option>
-                </select>
-                <button
-                  className="attachment-remove"
-                  type="button"
-                  aria-label={`删除附件：${file.name}`}
-                  disabled={disabled}
-                  onClick={() => onRemoveAttachment(file.id)}
-                >
-                  <X size={16} />
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
+      <div className="composer">
         <textarea
           rows={1}
           disabled={disabled}
@@ -264,44 +140,24 @@ export const Composer = ({
           }}
         />
         <div className="composer__footer">
-          <button
-            className="attachment-button"
-            type="button"
-            aria-label="上传附件"
-            disabled={disabled || uploading || attachments.length >= 5}
-            title="支持 PDF、DOCX、XLSX、TXT、MD、JPG、PNG，单文件不超过 1 MiB"
-            onClick={() => fileInput.current?.click()}
-          >
-            {uploading ? <LoaderCircle className="spin" size={19} /> : <Paperclip size={19} />}
-          </button>
-          <input
-            ref={fileInput}
-            className="visually-hidden"
-            type="file"
-            multiple
-            accept=".pdf,.docx,.xlsx,.txt,.md,.jpg,.jpeg,.png"
-            aria-label="选择附件"
-            onChange={(event) => {
-              onFilesSelected(Array.from(event.target.files ?? []));
-              event.target.value = '';
-            }}
-          />
           <div className="composer__agent" ref={agentMenu}>
-            <button
-              ref={agentMenuTrigger}
-              className="composer__agent-trigger"
-              type="button"
-              aria-label={`选择问答功能，当前：${activeAgent?.name ?? '未选择'}`}
-              aria-haspopup="listbox"
-              aria-expanded={agentMenuOpen}
-              aria-controls="composer-agent-menu"
-              disabled={disabled}
-              onClick={() => setAgentMenuOpen((open) => !open)}
-            >
-              <ChartNoAxesCombined size={16} strokeWidth={1.8} aria-hidden="true" />
-              <span>{activeAgent?.name ?? '选择 Agent'}</span>
-            </button>
-            {agentMenuOpen && (
+            {showAgentSelector && (
+              <button
+                ref={agentMenuTrigger}
+                className="composer__agent-trigger"
+                type="button"
+                aria-label={`选择问答功能，当前：${activeAgent?.name ?? '未选择'}`}
+                aria-haspopup="listbox"
+                aria-expanded={agentMenuOpen}
+                aria-controls="composer-agent-menu"
+                disabled={disabled}
+                onClick={() => setAgentMenuOpen((open) => !open)}
+              >
+                <ChartNoAxesCombined size={16} strokeWidth={1.8} aria-hidden="true" />
+                <span>{activeAgent?.name ?? '选择 Agent'}</span>
+              </button>
+            )}
+            {showAgentSelector && agentMenuOpen && (
               <div
                 className="composer__agent-menu"
                 id="composer-agent-menu"
@@ -350,7 +206,7 @@ export const Composer = ({
             <button
               className="send-button"
               aria-label="发送问题"
-              disabled={disabled || uploading || !filesReady || !value.trim()}
+              disabled={disabled || !value.trim()}
               onClick={submit}
             >
               <ArrowUp size={18} strokeWidth={2.5} />
@@ -358,9 +214,7 @@ export const Composer = ({
           )}
         </div>
       </div>
-      <p className="composer-hint">
-        回车发送，Shift + Enter 换行 · 支持拖拽上传文件 · 关键业务信息仍需人工确认
-      </p>
+      <p className="composer-hint">回车发送，Shift + Enter 换行 · 关键业务信息仍需人工确认</p>
     </div>
   );
 };

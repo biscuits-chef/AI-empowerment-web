@@ -79,14 +79,6 @@ const gateway = (): QaGateway => ({
     nextCursor: null,
     hasMore: false,
   }),
-  createConversation: vi.fn().mockImplementation((title: string) =>
-    Promise.resolve({
-      id: 'chat-1',
-      title,
-      createdAt: '2026-01-01',
-      updatedAt: '2026-01-01',
-    }),
-  ),
   renameConversation: vi.fn().mockImplementation((chatId: string, title: string) =>
     Promise.resolve({
       id: chatId,
@@ -97,21 +89,18 @@ const gateway = (): QaGateway => ({
   ),
   deleteConversation: vi.fn(),
   listMessages: vi.fn().mockResolvedValue([]),
-  uploadFile: vi.fn().mockImplementation((_chatId: string, file: File) =>
+  submitQuestion: vi.fn().mockImplementation((chatId: string | null, question: string) =>
     Promise.resolve({
-      id: 'file-1',
-      conversationId: 'chat-1',
-      name: file.name,
-      contentType: file.type,
-      sizeBytes: file.size,
-      usage: 'AUTO' as const,
-      status: 'READY' as const,
-      createdAt: '2026-01-01',
-      updatedAt: '2026-01-01',
+      conversation: {
+        id: chatId ?? 'chat-1',
+        title: question,
+        createdAt: '2026-01-01',
+        updatedAt: '2026-01-01',
+      },
+      conversationCreated: chatId === null,
+      answer: snapshot,
     }),
   ),
-  deleteFile: vi.fn().mockResolvedValue(undefined),
-  submitQuestion: vi.fn().mockResolvedValue(snapshot),
   regenerateAnswer: vi.fn().mockResolvedValue(snapshot),
   cancelAnswer: vi.fn().mockResolvedValue({ ...snapshot, status: 'CANCEL_REQUESTED' }),
   getAnswer: vi.fn().mockResolvedValue(snapshot),
@@ -126,95 +115,76 @@ const gateway = (): QaGateway => ({
 });
 
 describe('App', () => {
+  it('默认并列展示左侧会话列表并支持折叠与恢复', async () => {
+    const user = userEvent.setup();
+    render(<App gateway={gateway()} config={config} />);
+
+    await screen.findByText('今天想完成什么？');
+    expect(screen.getByRole('complementary', { name: '聊天记录' })).toHaveClass(
+      'sidebar--persistent',
+    );
+    expect(document.querySelector('.main-panel')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '关闭侧边栏' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '打开侧边栏' })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: '关闭侧边栏' }));
+    expect(screen.queryByRole('complementary', { name: '聊天记录' })).not.toBeInTheDocument();
+    expect(document.querySelector('.main-panel')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '打开侧边栏' })).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: '打开侧边栏' }));
+    expect(screen.getByRole('complementary', { name: '聊天记录' })).toHaveClass(
+      'sidebar--persistent',
+    );
+    expect(screen.getByRole('button', { name: '关闭侧边栏' })).toBeInTheDocument();
+  });
+
   it('完成从空白页到流式答案的主流程', async () => {
     const qaGateway = gateway();
     const user = userEvent.setup();
     render(<App gateway={qaGateway} config={config} />);
     expect(await screen.findByText('今天想完成什么？')).toBeInTheDocument();
+    expect(screen.getByLabelText('选择问答功能，当前：智能问数')).toBeInTheDocument();
     await user.type(screen.getByLabelText('输入问题'), '产品经理是谁');
     await user.click(screen.getByLabelText('发送问题'));
     expect(await screen.findByText('产品经理为张经理。')).toBeInTheDocument();
     expect(screen.getByText('来源与产物（1）')).toBeInTheDocument();
+    expect(screen.queryByLabelText(/选择问答功能/)).not.toBeInTheDocument();
     await waitFor(() =>
       expect(qaGateway.submitQuestion).toHaveBeenCalledWith(
-        'chat-1',
+        null,
         '产品经理是谁',
         'SMART_DATA',
-        [],
+        expect.any(String),
       ),
     );
-    expect(qaGateway.createConversation).toHaveBeenCalledWith('产品经理是谁');
   });
 
-  it('上传附件、选择用途并随问题提交文件引用', async () => {
+  it('一期输入区不展示文件上传入口', async () => {
+    render(<App gateway={gateway()} config={config} />);
+    await screen.findByText('今天想完成什么？');
+    expect(screen.queryByLabelText('上传附件')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('选择附件')).not.toBeInTheDocument();
+  });
+
+  it('相同提问在响应失败后重试时复用幂等键', async () => {
     const qaGateway = gateway();
+    vi.mocked(qaGateway.submitQuestion).mockRejectedValueOnce(new Error('网络中断'));
     const user = userEvent.setup();
     render(<App gateway={qaGateway} config={config} />);
     await screen.findByText('今天想完成什么？');
 
-    const file = new File(['product_code\nP001'], '产品编号.txt', { type: 'text/plain' });
-    await user.upload(screen.getByLabelText('选择附件'), file);
-    expect(await screen.findByText('产品编号.txt')).toBeInTheDocument();
-    await user.selectOptions(screen.getByLabelText('设置附件用途：产品编号.txt'), 'QUERY_INPUT');
-    await user.type(screen.getByLabelText('输入问题'), '查询这些产品的信息');
+    await user.type(screen.getByLabelText('输入问题'), '查询产品经理');
     await user.click(screen.getByLabelText('发送问题'));
+    await screen.findByRole('alert');
+    await user.type(screen.getByLabelText('输入问题'), '查询产品经理');
+    await user.click(screen.getByLabelText('发送问题'));
+    await waitFor(() => expect(qaGateway.submitQuestion).toHaveBeenCalledTimes(2));
 
-    await waitFor(() =>
-      expect(qaGateway.submitQuestion).toHaveBeenCalledWith(
-        'chat-1',
-        '查询这些产品的信息',
-        'SMART_DATA',
-        [{ fileId: 'file-1', usage: 'QUERY_INPUT' }],
-      ),
-    );
-    expect(qaGateway.renameConversation).toHaveBeenCalledWith('chat-1', '查询这些产品的信息');
-    expect(screen.getByText('产品编号.txt')).toBeInTheDocument();
-    expect(screen.getByText(/^17 B · 查询条件$/)).toBeInTheDocument();
-    expect(screen.getByText('已随问题提交')).toBeInTheDocument();
-  });
-
-  it('在调用后端前拒绝超过一期大小限制的附件', async () => {
-    const qaGateway = gateway();
-    const user = userEvent.setup();
-    render(<App gateway={qaGateway} config={config} />);
-    await screen.findByText('今天想完成什么？');
-
-    const oversized = new File([new Uint8Array(1024 * 1024 + 1)], '过大附件.pdf', {
-      type: 'application/pdf',
-    });
-    await user.upload(screen.getByLabelText('选择附件'), oversized);
-
-    expect(await screen.findByRole('alert')).toHaveTextContent('超过 1 MiB 限制');
-    expect(qaGateway.uploadFile).not.toHaveBeenCalled();
-  });
-
-  it('批量上传部分失败时保留此前已成功的附件', async () => {
-    const qaGateway = gateway();
-    vi.mocked(qaGateway.uploadFile)
-      .mockResolvedValueOnce({
-        id: 'file-success',
-        conversationId: 'chat-1',
-        name: '成功.txt',
-        contentType: 'text/plain',
-        sizeBytes: 4,
-        usage: 'AUTO',
-        status: 'READY',
-        createdAt: '2026-01-01',
-        updatedAt: '2026-01-01',
-      })
-      .mockRejectedValueOnce(new Error('上传失败'));
-    const user = userEvent.setup();
-    render(<App gateway={qaGateway} config={config} />);
-    await screen.findByText('今天想完成什么？');
-
-    await user.upload(screen.getByLabelText('选择附件'), [
-      new File(['P001'], '成功.txt', { type: 'text/plain' }),
-      new File(['P002'], '失败.txt', { type: 'text/plain' }),
-    ]);
-
-    expect(await screen.findByText('成功.txt')).toBeInTheDocument();
-    expect(await screen.findByRole('alert')).toHaveTextContent('操作未完成，请稍后重试');
-    expect(qaGateway.uploadFile).toHaveBeenCalledTimes(2);
+    const firstKey = vi.mocked(qaGateway.submitQuestion).mock.calls[0]?.[3];
+    const retryKey = vi.mocked(qaGateway.submitQuestion).mock.calls[1]?.[3];
+    expect(firstKey).toBeTruthy();
+    expect(retryKey).toBe(firstKey);
   });
 
   it('支持快捷问题与主题切换', async () => {
@@ -253,7 +223,12 @@ describe('App', () => {
     await user.type(screen.getByLabelText('输入问题'), '第二个');
     await user.click(screen.getByLabelText('发送问题'));
     await waitFor(() => expect(qaGateway.submitQuestion).toHaveBeenCalledTimes(2));
-    expect(qaGateway.submitQuestion).toHaveBeenLastCalledWith('chat-1', '第二个', 'SMART_DATA', []);
+    expect(qaGateway.submitQuestion).toHaveBeenLastCalledWith(
+      'chat-1',
+      '第二个',
+      null,
+      expect.any(String),
+    );
   });
 
   it('加载历史答案并支持反馈、重新生成和新聊天', async () => {
@@ -396,7 +371,7 @@ describe('App', () => {
     await user.click(screen.getByLabelText('重新生成回答'));
     expect(qaGateway.regenerateAnswer).toHaveBeenCalledWith('answer-old');
     expect(screen.getAllByText('查询附件中的产品')).toHaveLength(2);
-    expect(screen.getAllByText('历史产品.xlsx')).toHaveLength(2);
+    expect(screen.getAllByText('历史产品.xlsx')).toHaveLength(1);
     expect(screen.getByText('今天')).toBeInTheDocument();
     expect(screen.queryByText('更早')).not.toBeInTheDocument();
     await user.click(screen.getByText('新建会话'));

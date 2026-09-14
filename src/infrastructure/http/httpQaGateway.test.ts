@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { AnswerSnapshot, Conversation, Message, TemporaryFile } from '../../domain/models';
+import type { AnswerSnapshot, Conversation, Message } from '../../domain/models';
 import type { RuntimeConfig } from '../config/runtimeConfig';
 import { ApiError, HttpQaGateway, ReplayGapError } from './httpQaGateway';
 
@@ -50,18 +50,11 @@ const answer: AnswerSnapshot = {
   cancelRequestedAt: null,
   cancelledAt: null,
 };
-const temporaryFile: TemporaryFile = {
-  id: 'file-1',
-  conversationId: 'chat-1',
-  name: '产品.txt',
-  contentType: 'text/plain',
-  sizeBytes: 6,
-  usage: 'AUTO',
-  status: 'READY',
-  createdAt: '2026-01-01',
-  updatedAt: '2026-01-01',
+const submission = {
+  conversation,
+  conversationCreated: true,
+  answer,
 };
-
 /**
  * 为接口测试创建指定载荷的 JSON 响应。
  *
@@ -86,13 +79,10 @@ describe('HttpQaGateway', () => {
       .mockResolvedValueOnce(
         jsonResponse({ items: [conversation], nextCursor: 'next-page', hasMore: true }),
       )
-      .mockResolvedValueOnce(jsonResponse(conversation, 201))
       .mockResolvedValueOnce(jsonResponse(conversation))
       .mockResolvedValueOnce(new Response(null, { status: 204 }))
       .mockResolvedValueOnce(jsonResponse([message]))
-      .mockResolvedValueOnce(jsonResponse(temporaryFile, 201))
-      .mockResolvedValueOnce(new Response(null, { status: 204 }))
-      .mockResolvedValueOnce(jsonResponse(answer, 202))
+      .mockResolvedValueOnce(jsonResponse(submission, 202))
       .mockResolvedValueOnce(jsonResponse(answer, 202))
       .mockResolvedValueOnce(jsonResponse({ ...answer, status: 'CANCEL_REQUESTED' }, 202))
       .mockResolvedValueOnce(jsonResponse(answer))
@@ -104,18 +94,12 @@ describe('HttpQaGateway', () => {
       nextCursor: 'next-page',
       hasMore: true,
     });
-    await expect(gateway.createConversation('测试聊天')).resolves.toEqual(conversation);
     await expect(gateway.renameConversation('chat-1', '新名称')).resolves.toEqual(conversation);
     await expect(gateway.deleteConversation('chat-1')).resolves.toBeUndefined();
     await expect(gateway.listMessages('chat-1')).resolves.toEqual([message]);
-    const upload = new File(['产品'], '产品.txt', { type: 'text/plain' });
-    await expect(gateway.uploadFile('chat-1', upload, 'AUTO')).resolves.toEqual(temporaryFile);
-    await expect(gateway.deleteFile('chat-1', 'file-1')).resolves.toBeUndefined();
     await expect(
-      gateway.submitQuestion('chat-1', '问题', 'SMART_DATA', [
-        { fileId: 'file-1', usage: 'EVIDENCE' },
-      ]),
-    ).resolves.toEqual(answer);
+      gateway.submitQuestion(null, '问题', 'SMART_DATA', 'question-key'),
+    ).resolves.toEqual(submission);
     await expect(gateway.regenerateAnswer('answer-1')).resolves.toEqual(answer);
     await expect(gateway.cancelAnswer('answer-1')).resolves.toMatchObject({
       status: 'CANCEL_REQUESTED',
@@ -123,18 +107,40 @@ describe('HttpQaGateway', () => {
     await expect(gateway.getAnswer('answer-1')).resolves.toEqual(answer);
     await expect(gateway.recordFeedback('answer-1', 'LIKE')).resolves.toBeUndefined();
 
-    expect(fetchMock).toHaveBeenCalledTimes(12);
-    expect(fetchMock.mock.calls[0]?.[0]).toBe('/api/v1/chats?limit=20&cursor=current-page');
-    const uploadCall = fetchMock.mock.calls[5];
-    expect(uploadCall?.[1]?.body).toBeInstanceOf(FormData);
-    expect(new Headers(uploadCall?.[1]?.headers).has('Content-Type')).toBe(false);
-    const submit = fetchMock.mock.calls[7];
-    expect(submit?.[0]).toBe('/api/v1/chats/chat-1/questions');
-    expect(new Headers(submit?.[1]?.headers).get('Idempotency-Key')).toBeTruthy();
+    expect(fetchMock).toHaveBeenCalledTimes(9);
+    expect(fetchMock.mock.calls.map(([url, init]) => [url, init?.method ?? 'GET'])).toEqual([
+      ['/api/v1/chats?limit=20&cursor=current-page', 'GET'],
+      ['/api/v1/chats/chat-1/rename', 'POST'],
+      ['/api/v1/chats/chat-1/deletion', 'POST'],
+      ['/api/v1/chats/chat-1/messages?limit=100', 'GET'],
+      ['/api/v1/questions/submission', 'POST'],
+      ['/api/v1/answers/answer-1/regenerations', 'POST'],
+      ['/api/v1/answers/answer-1/cancellation', 'POST'],
+      ['/api/v1/answers/answer-1', 'GET'],
+      ['/api/v1/answers/answer-1/feedback', 'POST'],
+    ]);
+    fetchMock.mock.calls.forEach(([, init]) => {
+      expect(['GET', 'POST']).toContain(init?.method ?? 'GET');
+    });
+    const requestUrls = fetchMock.mock.calls.map(([url]) => url);
+    expect(new Set(requestUrls).size).toBe(requestUrls.length);
+    const submit = fetchMock.mock.calls[4];
+    expect(submit?.[0]).toBe('/api/v1/questions/submission');
+    expect(new Headers(submit?.[1]?.headers).get('Idempotency-Key')).toBe('question-key');
     expect(submit?.[1]?.credentials).toBe('include');
-    expect(submit?.[1]?.body).toBe(
-      '{"agentType":"SMART_DATA","question":"问题","files":[{"fileId":"file-1","usage":"EVIDENCE"}]}',
-    );
+    expect(submit?.[1]?.body).toBe('{"chatId":null,"agentType":"SMART_DATA","question":"问题"}');
+  });
+
+  it('已有会话的后续提问不发送 Agent 类型字段', async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(jsonResponse({ ...submission, conversationCreated: false }, 202));
+
+    await new HttpQaGateway(config).submitQuestion('chat-1', '继续提问', null, 'follow-up-key');
+
+    const request = fetchMock.mock.calls[0];
+    expect(request?.[1]?.body).toBe('{"chatId":"chat-1","question":"继续提问"}');
+    expect(new Headers(request?.[1]?.headers).get('Idempotency-Key')).toBe('follow-up-key');
   });
 
   it.each([
@@ -184,6 +190,7 @@ describe('HttpQaGateway', () => {
       onEvent: (event) => events.push(`${event.id}:${event.value}`),
     });
     expect(events).toEqual(['3:第一段', '4:stop']);
+    expect(fetchMock.mock.calls[0]?.[1]?.method ?? 'GET').toBe('GET');
     expect(new Headers(fetchMock.mock.calls[0]?.[1]?.headers).get('Last-Event-ID')).toBe('2');
   });
 

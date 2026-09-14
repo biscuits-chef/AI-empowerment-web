@@ -7,14 +7,11 @@ import type {
   DisplayMessage,
   Feedback,
   Message,
-  TemporaryFile,
-  TemporaryFileUsage,
 } from '../../domain/models';
 import { isTerminalStatus } from '../../domain/models';
 import { ApiError, ReplayGapError } from '../../infrastructure/http/httpQaGateway';
 import { DEFAULT_AGENT_TYPE, findAgent } from '../../infrastructure/config/agentCatalog';
 import { chatReducer, initialChatState } from '../state/chatState';
-import { conversationTitleFromFirstQuestion } from '../conversationTitle';
 
 const stageByEvent: Partial<Record<AnswerStreamEvent['type'], string>> = {
   workflow_plan_selected: '已选择双通道执行流程',
@@ -31,35 +28,14 @@ const stageByEvent: Partial<Record<AnswerStreamEvent['type'], string>> = {
   cancellation_requested: '正在停止回答',
 };
 
-/** 一期单个附件的前端预校验字节上限。 */
-const MAXIMUM_FILE_BYTES = 1024 * 1024;
-/** 一期允许的附件扩展名。 */
-const SUPPORTED_FILE_EXTENSIONS = new Set([
-  'pdf',
-  'docx',
-  'xlsx',
-  'txt',
-  'md',
-  'jpg',
-  'jpeg',
-  'png',
-]);
-
 /**
- * 在上传前执行大小、类型和空文件预校验；服务端仍是最终校验依据。
- *
- * @param file 浏览器选择的文件。
- * @returns 校验通过时为空，否则返回用户提示。
+ * 等待确认的提问幂等信息，用于响应丢失后的安全重试。
  */
-const validateLocalFile = (file: File): string | null => {
-  if (file.size === 0) return `${file.name} 是空文件，无法上传`;
-  if (file.size > MAXIMUM_FILE_BYTES) return `${file.name} 超过 1 MiB 限制`;
-  const separator = file.name.lastIndexOf('.');
-  const extension = separator < 0 ? '' : file.name.slice(separator + 1).toLowerCase();
-  if (!SUPPORTED_FILE_EXTENSIONS.has(extension)) {
-    return `${file.name} 的文件类型暂不支持`;
-  }
-  return null;
+type PendingSubmission = {
+  /** 由会话、首次选择的 Agent 和问题共同组成的稳定请求指纹。 */
+  fingerprint: string;
+  /** 同一逻辑提问失败重试期间复用的幂等键。 */
+  idempotencyKey: string;
 };
 
 /**
@@ -142,8 +118,7 @@ export const useChatController = (gateway: QaGateway) => {
   const [state, dispatch] = useReducer(chatReducer, initialChatState);
   const streams = useRef(new Map<string, AbortController>());
   const selectionSequence = useRef(0);
-  const [attachments, setAttachments] = useState<TemporaryFile[]>([]);
-  const [uploadingFiles, setUploadingFiles] = useState(false);
+  const pendingSubmission = useRef<PendingSubmission | null>(null);
   const [activeAgentType, setActiveAgentType] = useState<AgentType>(DEFAULT_AGENT_TYPE);
 
   useEffect(() => {
@@ -367,7 +342,6 @@ export const useChatController = (gateway: QaGateway) => {
     async (chatId: string): Promise<void> => {
       const requestSequence = selectionSequence.current + 1;
       selectionSequence.current = requestSequence;
-      setAttachments([]);
       dispatch({ type: 'selecting', chatId });
       try {
         const messages = await gateway.listMessages(chatId);
@@ -409,86 +383,9 @@ export const useChatController = (gateway: QaGateway) => {
    */
   const newChat = useCallback((): void => {
     selectionSequence.current += 1;
-    setAttachments([]);
+    setActiveAgentType(DEFAULT_AGENT_TYPE);
     dispatch({ type: 'selecting', chatId: null });
   }, []);
-
-  /**
-   * 上传用户选择的临时文件；新聊天会先建立会话归属再上传。
-   *
-   * @param files 浏览器选择的文件列表。
-   *
-   * @returns 函数处理结果。
-   */
-  const uploadFiles = useCallback(
-    async (files: File[]): Promise<void> => {
-      if (files.length === 0 || uploadingFiles) return;
-      if (attachments.length + files.length > 5) {
-        dispatch({ type: 'error', message: '单个问题最多上传 5 个附件' });
-        return;
-      }
-      const invalidFile = files.map(validateLocalFile).find((message) => message !== null);
-      if (invalidFile) {
-        dispatch({ type: 'error', message: invalidFile });
-        return;
-      }
-      setUploadingFiles(true);
-      dispatch({ type: 'error', message: null });
-      try {
-        let chatId = state.activeChatId;
-        if (!chatId) {
-          const conversation = await gateway.createConversation('新聊天');
-          chatId = conversation.id;
-          dispatch({ type: 'conversationAdded', conversation });
-          dispatch({ type: 'selecting', chatId });
-          dispatch({ type: 'messagesLoaded', messages: [] });
-        }
-        for (const file of files) {
-          const uploaded = await gateway.uploadFile(chatId, file, 'AUTO');
-          // 批量上传中后续文件失败时，保留并展示此前已成功上传的文件，避免产生不可见孤儿附件。
-          setAttachments((current) => [...current, uploaded]);
-        }
-      } catch (error) {
-        dispatch({ type: 'error', message: errorMessage(error) });
-      } finally {
-        setUploadingFiles(false);
-      }
-    },
-    [attachments.length, gateway, state.activeChatId, uploadingFiles],
-  );
-
-  /**
-   * 修改附件在本次问题中的使用角色，不改变已上传对象内容。
-   *
-   * @param fileId 文件 ID。
-   * @param usage 新使用角色。
-   */
-  const changeAttachmentUsage = useCallback((fileId: string, usage: TemporaryFileUsage): void => {
-    setAttachments((current) =>
-      current.map((file) => (file.id === fileId ? { ...file, usage } : file)),
-    );
-  }, []);
-
-  /**
-   * 删除尚未随当前问题提交的附件。
-   *
-   * @param fileId 文件 ID。
-   *
-   * @returns 函数处理结果。
-   */
-  const removeAttachment = useCallback(
-    async (fileId: string): Promise<void> => {
-      const chatId = state.activeChatId;
-      if (!chatId) return;
-      try {
-        await gateway.deleteFile(chatId, fileId);
-        setAttachments((current) => current.filter((file) => file.id !== fileId));
-      } catch (error) {
-        dispatch({ type: 'error', message: errorMessage(error) });
-      }
-    },
-    [gateway, state.activeChatId],
-  );
 
   /**
    * 创建必要会话并提交问题和订阅回答。
@@ -501,41 +398,32 @@ export const useChatController = (gateway: QaGateway) => {
     async (question: string): Promise<void> => {
       const cleanQuestion = question.trim();
       if (!cleanQuestion || state.sending) return;
-      if (attachments.some((file) => file.status !== 'READY')) {
-        dispatch({ type: 'error', message: '附件仍在处理，请等待全部文件就绪后再发送' });
-        return;
-      }
       dispatch({ type: 'sending', value: true });
       dispatch({ type: 'error', message: null });
       try {
-        const submittedAttachments = attachments.map((file) => ({
-          fileId: file.id,
-          name: file.name,
-          contentType: file.contentType,
-          sizeBytes: file.sizeBytes,
-          usage: file.usage,
-          status: file.status,
-        }));
-        let chatId = state.activeChatId;
-        let conversationForActivityUpdate = state.conversations.find(({ id }) => id === chatId);
-        const defaultTitle = conversationTitleFromFirstQuestion(cleanQuestion);
-        if (!chatId) {
-          const conversation = await gateway.createConversation(defaultTitle);
-          chatId = conversation.id;
-          conversationForActivityUpdate = conversation;
-          dispatch({ type: 'conversationAdded', conversation });
+        const requestedChatId = state.activeChatId;
+        const requestedAgentType = requestedChatId === null ? activeAgentType : null;
+        const fingerprint = JSON.stringify([requestedChatId, requestedAgentType, cleanQuestion]);
+        const idempotencyKey =
+          pendingSubmission.current?.fingerprint === fingerprint
+            ? pendingSubmission.current.idempotencyKey
+            : crypto.randomUUID();
+        pendingSubmission.current = { fingerprint, idempotencyKey };
+        const submission = await gateway.submitQuestion(
+          requestedChatId,
+          cleanQuestion,
+          requestedAgentType,
+          idempotencyKey,
+        );
+        pendingSubmission.current = null;
+        const chatId = submission.conversation.id;
+        if (submission.conversationCreated) {
+          dispatch({ type: 'conversationAdded', conversation: submission.conversation });
           dispatch({ type: 'selecting', chatId });
           // 新建会话没有历史消息可等待，立即结束选择加载态后再追加本次用户消息。
           dispatch({ type: 'messagesLoaded', messages: [] });
         } else {
-          const placeholderConversation = state.conversations.find(
-            ({ id, title }) => id === chatId && title === '新聊天',
-          );
-          if (placeholderConversation && state.messages.length === 0) {
-            const renamedConversation = await gateway.renameConversation(chatId, defaultTitle);
-            conversationForActivityUpdate = renamedConversation;
-            dispatch({ type: 'conversationUpdated', conversation: renamedConversation });
-          }
+          dispatch({ type: 'conversationUpdated', conversation: submission.conversation });
         }
         dispatch({
           type: 'messageAdded',
@@ -544,50 +432,36 @@ export const useChatController = (gateway: QaGateway) => {
             role: 'USER',
             content: cleanQuestion,
             createdAt: new Date().toISOString(),
-            attachments: submittedAttachments,
           },
         });
-        const snapshot = await gateway.submitQuestion(
-          chatId,
-          cleanQuestion,
-          activeAgentType,
-          submittedAttachments.map((file) => ({ fileId: file.fileId, usage: file.usage })),
-        );
-        if (conversationForActivityUpdate) {
-          dispatch({
-            type: 'conversationUpdated',
-            conversation: { ...conversationForActivityUpdate, updatedAt: snapshot.createdAt },
-          });
-        }
-        setAttachments([]);
+        const snapshot = submission.answer;
+        dispatch({
+          type: 'conversationUpdated',
+          conversation: { ...submission.conversation, updatedAt: snapshot.createdAt },
+        });
         dispatch({ type: 'messageAdded', message: messageFromSnapshot(snapshot) });
         await followAnswer(snapshot);
       } catch (error) {
         dispatch({ type: 'error', message: errorMessage(error) });
       }
     },
-    [
-      activeAgentType,
-      attachments,
-      followAnswer,
-      gateway,
-      state.activeChatId,
-      state.conversations,
-      state.messages.length,
-      state.sending,
-    ],
+    [activeAgentType, followAnswer, gateway, state.activeChatId, state.sending],
   );
 
   /**
-   * 切换当前提问使用的 Agent；仅允许选择前端目录中已开放的能力。
+   * 切换新建会话使用的 Agent；已有会话中不允许修改。
    *
    * @param agentType 用户选择的 Agent 类型。
    */
-  const selectAgent = useCallback((agentType: AgentType): void => {
-    const agent = findAgent(agentType);
-    if (!agent?.available) return;
-    setActiveAgentType(agentType);
-  }, []);
+  const selectAgent = useCallback(
+    (agentType: AgentType): void => {
+      if (state.activeChatId !== null) return;
+      const agent = findAgent(agentType);
+      if (!agent?.available) return;
+      setActiveAgentType(agentType);
+    },
+    [state.activeChatId],
+  );
 
   /**
    * 调用停止接口并等待服务端状态收敛。
@@ -643,7 +517,6 @@ export const useChatController = (gateway: QaGateway) => {
             role: 'USER',
             content: originalQuestion.content,
             createdAt: snapshot.createdAt,
-            attachments: originalQuestion.attachments?.map((attachment) => ({ ...attachment })),
           },
         });
         const currentConversation = state.conversations.find(({ id }) => id === state.activeChatId);
@@ -732,17 +605,12 @@ export const useChatController = (gateway: QaGateway) => {
   return {
     state,
     activeAgentType,
-    attachments,
-    uploadingFiles,
     activeConversation,
     loadMoreConversations,
     selectChat,
     newChat,
     selectAgent,
     sendQuestion,
-    uploadFiles,
-    removeAttachment,
-    changeAttachmentUsage,
     stopAnswer,
     regenerate,
     feedback,
